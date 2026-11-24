@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulatore 3D: L'Ipermetropia</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, sans-serif; }
+        body { background-color: #0b1120; color: #f1f5f9; overflow: hidden; width: 100vw; height: 100vh; position: relative; }
+        #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; cursor: grab; background: radial-gradient(circle at center, #1e293b 0%, #0b1120 100%); }
+        #canvas-container:active { cursor: grabbing; }
+
+        .mode-selector { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; z-index: 20; background: rgba(30, 41, 59, 0.85); padding: 8px 12px; border-radius: 12px; border: 1px solid #334155; backdrop-filter: blur(8px); box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+        button { background: #1e293b; color: #cbd5e1; border: 1px solid #475569; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: all 0.2s; }
+        button:hover { background: #334155; color: #fff; }
+        button.active { background: #0284c7; color: #ffffff; border-color: #38bdf8; box-shadow: 0 0 12px rgba(2, 132, 199, 0.5); }
+
+        .pov-box { position: absolute; bottom: 20px; left: 20px; width: 260px; background: rgba(15, 23, 42, 0.95); border: 1px solid #38bdf8; border-radius: 10px; overflow: hidden; z-index: 20; box-shadow: 0 10px 25px rgba(0,0,0,0.6); }
+        .pov-header { background: #0284c7; padding: 6px 10px; font-size: 0.75rem; font-weight: 700; display: flex; justify-content: space-between; align-items: center; color: #fff; }
+        .pov-content { height: 130px; position: relative; display: flex; justify-content: center; align-items: center; background: #f8fafc; overflow: hidden; }
+        .pov-scene { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; transition: filter 0.25s ease; padding: 10px; text-align: center; }
+        
+        .snellen-chart { display: flex; flex-direction: column; align-items: center; gap: 4px; color: #0f172a; font-weight: bold; letter-spacing: 4px; }
+        .line-1 { font-size: 1.1rem; }
+        .line-2 { font-size: 0.85rem; letter-spacing: 3px; }
+        .line-3 { font-size: 0.65rem; letter-spacing: 2px; }
+        .line-4 { font-size: 0.5rem; letter-spacing: 1.5px; color: #334155; }
+    </style>
+</head>
+<body>
+    <div class="mode-selector">
+        <button id="btn-normal" onclick="setMode('normal')">1. Visione Normale 🟢</button>
+        <button id="btn-hyper" onclick="setMode('hyper')">2. Ipermetropia 🔴</button>
+        <button id="btn-correct" onclick="setMode('correct')">3. Corretta + Lente 🔵</button>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <div class="pov-box">
+        <div class="pov-header">
+            <span>Cosa vede l'occhio</span>
+            <span id="pov-status" style="font-size: 0.65rem; background: rgba(0,0,0,0.35); padding: 2px 5px; border-radius: 3px; color:#fff;">Sfocato</span>
+        </div>
+        <div class="pov-content">
+            <div class="pov-scene" id="pov-scene">
+                <div class="snellen-chart">
+                    <div class="line-1">E</div>
+                    <div class="line-2">F P</div>
+                    <div class="line-3">T O Z L</div>
+                    <div class="line-4">P E C F D</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        let scene, camera, renderer, controls, eyeGroup, lightGroup, correctiveLens, focalPointMesh;
+        let currentMode = 'hyper';
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0.5, 2.2, 9.5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+
+            const ambient = new THREE.AmbientLight(0xffffff, 0.75);
+            scene.add(ambient);
+
+            const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight1.position.set(5, 8, 8);
+            scene.add(dirLight1);
+
+            const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.35);
+            dirLight2.position.set(-6, -4, -5);
+            scene.add(dirLight2);
+
+            buildEyeStructure();
+            setMode('hyper');
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function buildEyeStructure() {
+            eyeGroup = new THREE.Group();
+            lightGroup = new THREE.Group();
+
+            // 1. Guscio esterno bianco (Sclera) sezionato a metà
+            const scleraGeo = new THREE.SphereGeometry(2.2, 48, 32, 0, Math.PI, 0, Math.PI);
+            const scleraMat = new THREE.MeshPhongMaterial({ color: 0xf1f5f9, side: THREE.FrontSide, shininess: 40 });
+            const sclera = new THREE.Mesh(scleraGeo, scleraMat);
+            sclera.rotation.y = Math.PI;
+            eyeGroup.add(sclera);
+
+            // 2. Rivestimento interno rosso (Coroide / Retina) perfettamente allineato dentro la metà della sclera
+            const innerGeo = new THREE.SphereGeometry(2.14, 48, 32, 0, Math.PI, 0, Math.PI);
+            const innerMat = new THREE.MeshPhongMaterial({ color: 0xb91c1c, side: THREE.BackSide, shininess: 20 });
+            const innerWall = new THREE.Mesh(innerGeo, innerMat);
+            innerWall.rotation.y = Math.PI;
+            eyeGroup.add(innerWall);
+
+            // 3. Bordo della sezione tagliata
+            const rimGeo = new THREE.RingGeometry(2.14, 2.2, 64);
+            const rimMat = new THREE.MeshBasicMaterial({ color: 0xcbd5e1, side: THREE.DoubleSide });
+            const rim = new THREE.Mesh(rimGeo, rimMat);
+            eyeGroup.add(rim);
+
+            // 4. Nervo Ottico posteriore
+            const nerveGeo = new THREE.CylinderGeometry(0.32, 0.42, 1.3, 24);
+            const nerveMat = new THREE.MeshPhongMaterial({ color: 0xfde047 });
+            const opticNerve = new THREE.Mesh(nerveGeo, nerveMat);
+            opticNerve.rotation.z = -Math.PI / 2;
+            opticNerve.position.set(2.6, -0.35, -0.2);
+            eyeGroup.add(opticNerve);
+
+            // 5. Cornea anteriore
+            const corneaGeo = new THREE.SphereGeometry(1.05, 32, 24, 0, Math.PI, 0, Math.PI * 0.45);
+            const corneaMat = new THREE.MeshPhongMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.38, shininess: 100 });
+            const cornea = new THREE.Mesh(corneaGeo, corneaMat);
+            cornea.rotation.z = Math.PI / 2;
+            cornea.rotation.x = Math.PI;
+            cornea.position.set(-1.95, 0, 0);
+            eyeGroup.add(cornea);
+
+            // 6. Cristallino
+            const lensGeo = new THREE.SphereGeometry(0.65, 32, 24);
+            lensGeo.scale(0.42, 1.15, 0.85);
+            const lensMat = new THREE.MeshPhongMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.85, shininess: 90 });
+            const crystalline = new THREE.Mesh(lensGeo, lensMat);
+            crystalline.position.set(-1.45, 0, -0.1);
+            eyeGroup.add(crystalline);
+
+            // 7. Lente Convergente Correttiva Esterna
+            const corrGeo = new THREE.SphereGeometry(1.25, 32, 24);
+            corrGeo.scale(0.22, 1.1, 0.9);
+            const corrMat = new THREE.MeshPhongMaterial({ color: 0x10b981, transparent: true, opacity: 0.65, shininess: 100 });
+            correctiveLens = new THREE.Mesh(corrGeo, corrMat);
+            correctiveLens.position.set(-3.3, 0, 0);
+            correctiveLens.visible = false;
+            eyeGroup.add(correctiveLens);
+
+            // 8. Punto Focale
+            const focusGeo = new THREE.SphereGeometry(0.11, 16, 16);
+            const focusMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+            focalPointMesh = new THREE.Mesh(focusGeo, focusMat);
+            lightGroup.add(focalPointMesh);
+
+            scene.add(eyeGroup);
+            scene.add(lightGroup);
+        }
+
+        function updateOpticalRays() {
+            for (let i = lightGroup.children.length - 1; i >= 0; i--) {
+                if (lightGroup.children[i] !== focalPointMesh) {
+                    lightGroup.remove(lightGroup.children[i]);
+                }
+            }
+
+            if (currentMode === 'normal') {
+                eyeGroup.scale.set(1.0, 1.0, 1.0);
+            } else {
+                eyeGroup.scale.set(0.88, 1.0, 1.0);
+            }
+
+            const rayHeights = [-0.65, -0.32, 0, 0.32, 0.65];
+            const rayMat = new THREE.LineBasicMaterial({ color: 0xfacc15 });
+
+            const retinaX = (currentMode === 'normal') ? 2.10 : 1.85;
+            let focusX = retinaX;
+
+            if (currentMode === 'hyper') {
+                focusX = retinaX + 0.75;
+                focalPointMesh.material.color.setHex(0xef4444);
+            } else {
+                focusX = retinaX;
+                focalPointMesh.material.color.setHex(0x4ade80);
+            }
+
+            focalPointMesh.position.set(focusX, 0, 0.05);
+
+            rayHeights.forEach(y => {
+                const pts = [];
+                pts.push(new THREE.Vector3(-5.8, y, 0.05));
+
+                if (currentMode === 'correct') {
+                    pts.push(new THREE.Vector3(-3.3 * 0.88, y, 0.05));
+                    pts.push(new THREE.Vector3(-1.45 * 0.88, y * 0.68, 0.05));
+                    pts.push(new THREE.Vector3(focusX, 0, 0.05));
+                } else {
+                    pts.push(new THREE.Vector3(-1.45 * 0.88, y * 0.85, 0.05));
+                    pts.push(new THREE.Vector3(focusX, 0, 0.05));
+                }
+
+                const geo = new THREE.BufferGeometry().setFromPoints(pts);
+                const line = new THREE.Line(geo, rayMat);
+                lightGroup.add(line);
+            });
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-selector button').forEach(b => b.classList.remove('active'));
+
+            const pov = document.getElementById('pov-scene');
+            const status = document.getElementById('pov-status');
+
+            if (mode === 'normal') {
+                document.getElementById('btn-normal').classList.add('active');
+                correctiveLens.visible = false;
+                pov.style.filter = "blur(0px)";
+                status.innerText = "Nitido";
+                status.style.background = "#16a34a";
+            } else if (mode === 'hyper') {
+                document.getElementById('btn-hyper').classList.add('active');
+                correctiveLens.visible = false;
+                pov.style.filter = "blur(3.5px)";
+                status.innerText = "Sfocato";
+                status.style.background = "#dc2626";
+            } else if (mode === 'correct') {
+                document.getElementById('btn-correct').classList.add('active');
+                correctiveLens.visible = true;
+                pov.style.filter = "blur(0px)";
+                status.innerText = "Corretto";
+                status.style.background = "#0284c7";
+            }
+
+            updateOpticalRays();
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        init();
+        animate();
+    </script>
+</body>
+</html>
+
